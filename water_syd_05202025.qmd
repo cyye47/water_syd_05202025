@@ -1,0 +1,244 @@
+---
+title: "water_syd_05202025"
+author: "Chaoyang Ye"
+format: html
+editor: visual
+execute:
+  warning: false
+  message: false
+---
+
+#### Explore water quality at Sydney beaches related to weather, time of day, date and geographical location
+
+1.  **Examine the water quality data by itself through time**
+
+```{r load packages}
+
+library(tidytuesdayR)
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+library(GGally)
+library(gridExtra)
+library(lubridate)
+library(rlang)
+library(plotly)
+```
+
+```{r load data}
+tuesdata <- tidytuesdayR::tt_load('2025-05-20')
+water_quality <- tuesdata$water_quality
+weather <- tuesdata$weather
+```
+
+3 key measurements in the water_quality dataframe: enterococci_cfu_100ml, water_temperature_c, conductivity_ms_cm
+
+remove water_temperature_c \> 100, which is likely caused by error
+
+log transform enterococci_cfu_100ml
+
+check their correlation with scatter plot
+
+```{r water quality vs temperature}
+water_quality_tf <- water_quality |> 
+  filter(water_temperature_c < 100) |>
+  mutate(log10_entero = log10(enterococci_cfu_100ml+1)) |>
+  mutate(log10_conduct = log10(conductivity_ms_cm+1))
+key_measure <- water_quality_tf |>
+  select(log10_entero, log10_conduct, water_temperature_c)
+ggpairs(key_measure)
+```
+
+Does not appear to have correlations between water temperature and bacteria or conductivity
+
+Next, check out relationship of bacteria and conductivity with time of day and day of the year
+
+```{r water quality vs time of the day}
+plot_tod <- function(df, col) {
+  ggplot(df, aes(x = time, y = !!sym(col))) +
+  geom_point(color = "steelblue", size = 1) +
+  labs(title = paste0(col, " Over Time of Day"),
+       x = "Time of Day", y = col) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 10, face = "bold"),
+    axis.title.x = element_text(size = 7),
+    axis.title.y = element_text(size = 7),
+    axis.text.x = element_text(size = 5),
+    axis.text.y = element_text(size = 5)
+  )
+}
+
+p1 <- plot_tod(water_quality_tf, "log10_entero")
+p2 <- plot_tod(water_quality_tf, "log10_conduct")
+
+grid.arrange(p1, p2, ncol = 2)
+```
+
+Not seeing particular pattern other than measurements were mostly taken during day time.
+
+```{r water quality vs day of the year}
+water_quality_tf <- water_quality_tf |>
+  mutate(
+    year = year(date),
+    doy = yday(date)
+  )
+
+plot_doy <- function(df, col) {
+  ggplot(df, aes(x = doy, y = !!sym(col), color = factor(year))) +
+  geom_point() +
+  labs(title = paste0(col, "Over Day of Year (Across Years)"),
+       x = "Day of Year", y = "log10_entero", color = "Year") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 10, face = "bold"),
+    axis.title.x = element_text(size = 7),
+    axis.title.y = element_text(size = 7),
+    axis.text.x = element_text(size = 5),
+    axis.text.y = element_text(size = 5),
+    legend.text = element_text(size = 5),
+    legend.title = element_text(size = 5)
+  )
+}
+
+p1 <- plot_doy(water_quality_tf, "log10_entero")
+p2 <- plot_doy(water_quality_tf, "log10_conduct")
+grid.arrange(p1, p2, ncol = 2)
+```
+
+```{r smooth out water quality vs day of the year}
+plot_doy_smooth <- function(df, col) {
+  ggplot(df, aes(x = doy, y = !!sym(col), color = factor(year))) +
+  geom_smooth(method = "loess", span = 0.7, se = FALSE) +
+  labs(title = paste0(col, " vs. Day of Year (Across Years)"),
+       x = "Day of Year", y = col, color = "Year") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 10, face = "bold"),
+    axis.title.x = element_text(size = 7),
+    axis.title.y = element_text(size = 7),
+    axis.text.x = element_text(size = 5),
+    axis.text.y = element_text(size = 5),
+    legend.text = element_text(size = 5),
+    legend.title = element_text(size = 5)
+  )
+}
+
+p1 <- plot_doy_smooth(water_quality_tf, "log10_entero")
+p2 <- plot_doy_smooth(water_quality_tf, "log10_conduct")
+grid.arrange(p1, p2, ncol = 2)
+```
+
+For most years, bacteria count is the lowest at around day 250 (late winter and early spring), and highest at the end of the year (summer); while conductivity showed the opposite trend for recent years
+
+Now check the bacteria count throughout the years by each region
+
+```{r geographic location impact}
+all_loc <- names(table(water_quality_tf$region))
+
+plot_region <- function(df, loc) {
+  ggplot(df[df$region == loc, ], aes(x = doy, y = log10_entero, color = factor(year))) +
+  geom_smooth(method = "loess", span = 0.7, se = FALSE) +
+  labs(title = paste0("Measure vs. Day of Year in ", loc),
+       x = "Day of Year", y = "log10_entero", color = "Year") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 10, face = "bold"),
+    axis.title.x = element_text(size = 7),
+    axis.title.y = element_text(size = 7),
+    axis.text.x = element_text(size = 5),
+    axis.text.y = element_text(size = 5),
+    legend.text = element_text(size = 5),
+    legend.title = element_text(size = 5)
+  )
+}
+
+all_plot <- lapply(all_loc, function(x)plot_region(water_quality_tf, x))
+do.call(grid.arrange, c(all_plot, ncol = 2))
+```
+
+Sydney harbor experiences less changes throughout the year than other regions. Southern Sydney had the widest swing during a year. Calculate yearly swings by region
+
+```{r yearly bacteria count range}
+water_entero_range <- water_quality_tf |>
+  select(region, year, log10_entero) |>
+  group_by(region, year) |>
+  summarise(
+    max_count = max(log10_entero, na.rm = T),
+    min_count = min(log10_entero, na.rm = T),
+    count_diff = max_count - min_count,
+    .groups = "drop"
+  )
+
+ggplot(water_entero_range, aes(x = year, y = count_diff, color = region)) +
+  geom_line() +
+  labs(title = paste0("log10_entero Yearly Swing by Region Over Years"),
+       x = "Year", y = "max(log10_entero) - min(log10_entero)") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 10, face = "bold"),
+    axis.title.x = element_text(size = 7),
+    axis.title.y = element_text(size = 7),
+    axis.text.x = element_text(size = 5),
+    axis.text.y = element_text(size = 5),
+    legend.text = element_text(size = 5),
+    legend.title = element_text(size = 5)
+  )
+```
+
+2.  **Explore the relationship of water quality with weather**
+
+    since there is no granular geological information about the weather, only date, temp and precipitation, I will ignore the latitude and longitude column and merge it with the water quality table by date.
+
+```{r merge weather with water quality data}
+water_quality_weather <- merge(
+  water_quality_tf[, c("region", "date", "time", "water_temperature_c", "log10_entero", "log10_conduct", "year", "doy")], 
+  weather[, c("date", "max_temp_C", "min_temp_C", "precipitation_mm")],
+  by.x = "date",
+  by.y = "date"
+  )
+
+water_quality_weather <- water_quality_weather |>
+  mutate(temp_diff = max_temp_C - min_temp_C)
+
+key_measure <- water_quality_weather |>
+  select(log10_entero, log10_conduct, max_temp_C, min_temp_C, temp_diff, precipitation_mm)
+ggpairs(key_measure)
+```
+
+Obvious correlation between min_temp_C and max_temp_C, max_temp_C and temp_diff. There seems to be a negative correlation between temp_diff and precipitation_mm, and between log10_entero and temp_diff and precipitation_mm. Does that mean less temperature swing during a day and/or low precipitation is correlated with higher bacteria count? What happens on days of low temp_diff [and]{.underline} low precipitation_mm?
+
+```{r 3D plot to examine relations among bacteria count, temp_diff and precipitation}
+water_quality_weather |>
+  select(log10_entero, temp_diff, precipitation_mm, year, region) |>
+  plot_ly(x = ~log10_entero, 
+          y = ~temp_diff, 
+          z = ~precipitation_mm,
+          color = ~region,
+          type = "scatter3d", 
+          mode = "markers", 
+          size = 2, 
+          alpha = 0.6)
+water_quality_weather |>
+  select(log10_entero, temp_diff, precipitation_mm, year, region) |>
+  plot_ly(x = ~log10_entero, 
+          y = ~temp_diff, 
+          z = ~precipitation_mm,
+          color = ~year,
+          type = "scatter3d", 
+          mode = "markers", 
+          size = 2, 
+          alpha = 0.6)
+```
+
+Highest bacteria counts came from Sydney harbor, and the counts were highest pre-2000
+
+Next we can examine temp_diff and precipitation_mm across the year
+
+```{r temperature difference and precipitation over the years}
+p1 <- plot_doy_smooth(water_quality_weather, "temp_diff")
+p2 <- plot_doy_smooth(water_quality_weather, "precipitation_mm")
+grid.arrange(p1, p2, ncol = 2)
+```
+
+Temperature differences are increasing during late winter time in recent years, explaining the lower bacteria counts. Precipitation is decreasing during the same period, also contributing to lower bacteria counts.
